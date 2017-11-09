@@ -1,0 +1,291 @@
+
+
+
+
+
+variable		A_bound_distsq				equal	0.16			## max distance squared an ion can be away from kink to be considered in the well
+variable		B_bound_distsq				equal	4.0		
+#variable		B_bound_coord				equal	27			# coordination to oxygens
+variable		B_bound_distsq_oxy			equal	1.5
+variable		B_bound_distsq_oxy_below	equal	6.5
+
+
+################################
+##### VARIABLE DEFINITIONS #####
+################################
+variable 		trajname 			string 	0nacl_1800wat			# trajectory name 
+variable 		inputtrajnumber 	equal 	0 						# initial trajectory file to read 
+variable 		trajnumberstart 	equal 	1						# first trajectory to run 
+variable 		ntraj 				equal 	20000						# number of trajectories to run 
+variable		prevacctrajnumb		equal	0
+variable 		natoms 				equal 	7108 					# number of atoms in simulation
+variable 		n_bond 				equal 	3600 					# number of bonds 
+variable 		n_ang				equal 	1800					# number of angles 
+variable 		xlow				equal 	-2.65 
+variable 		xhigh 				equal  	29.2667278
+variable 		ylow 				equal 	6.4668918
+variable 		yhigh 				equal 	38.9 
+variable 		zlow 				equal 	-5.0 
+variable 		zhigh 				equal 	86.9478223
+variable		seed				equal	7946
+variable		bond_angle_info		string	${trajname}_bonds_angles.dat		# default data file to initiate bonds, angles, etc.
+
+
+variable 		tstep 				equal 	2.0						# timestep in fs 
+variable 		delta_tm 			equal 	100						# time between checks of OPs for flexible length TPS
+variable 		delta_t_from_shoot 	equal 	30
+variable 		temp 				equal 	298						# temperature
+variable		pressure			equal	0.986923				# atm (i.e. 1 bar)
+variable		Pdamp				equal	1000
+variable 		save_coords 		equal 	1 						# save coordinates after every this many acceptances
+variable 		n_atom_types 		equal 	6 					# number of atom types in the simulation 
+variable		traj_script			string	run_traj.txt			# script name for running trajectory
+variable		lasttrajnumb		equal	${ntraj}+${trajnumberstart}-1		# for max value of for loop
+
+variable		output_file			string	${trajname}_TPS.txt
+
+
+## atom ids used to determine ghost positions
+variable		kinkid		equal	1676
+variable		g_s1_1		equal	1675
+variable		g_s1_2		equal	823
+variable		g_s1_3		equal	822
+variable		g_s2_1		equal	1674
+variable		g_s2_2		equal	822
+variable		g_s2_3		equal	820
+variable		g_s3_1		equal	1677
+variable		g_s3_2		equal	823
+variable		g_s3_3		equal	820
+
+variable		below_id	equal	820
+variable		behind_id	equal	823
+variable		next_id		equal	822
+
+
+variable 		D 			equal 	3 						# number of dimensions
+variable 		beta 		equal 	1.0/(0.001987204*${temp})		# mol/kcal 
+variable 		beta2 		equal 	1.0/(8.3144621*${temp})			# mol/J
+variable		beta3		equal 	${beta2}*0.0000001		# for rotational part; mol fs^2 / (g A^2)
+
+variable 		rigid_type_ind 		equal 	3				# atom type which indicates start of rigid body, for water this is O 
+variable		rigid_Nres 			equal 	3 				# number of atoms in the rigid body 
+variable 		n_rigid_types 		equal 	1 				# number of types of rigid atoms
+
+## need to define variables for atom masses somewhere, or access it with vector
+## but i'm not sure how well this would pass to python
+
+variable 		xbox 		equal 	${xhigh}-${xlow}					# x box length  
+variable 		ybox 		equal 	${yhigh}-${ylow} 				# y box length 
+variable 		zbox 		equal 	${zhigh}-${zlow}					# z box length 
+variable 		halfxbox	equal 	${xbox}/2.0 
+variable 		halfybox	equal 	${ybox}/2.0 
+variable 		halfzbox	equal 	${zbox}/2.0 
+
+# get some vars in terms of the number of timesteps
+variable 		delta_tm_steps 		equal 	${delta_tm}/${tstep} 
+variable		delta_t_from_shoot_n equal	${delta_t_from_shoot}/${tstep}
+
+# initialize items for thermodynamic output
+variable 		thermo_output 		string 	"Elapsed Temp Press TotEng PotEng "
+variable 		thermo_output_lmp 	string 	"elapsed temp press etotal pe"
+variable		n_thermo_outputs 	equal 	5		# number of thermo outputs  
+variable 		E_index 			equal 	3 		# index of total energy (for python)
+variable 		PE_index 			equal 	4 		# index of potential energy (for python)
+variable 		P_index				equal 	2 		# index of pressure (for python) 
+
+# make folder to store zipped coordinates in
+variable		coords_folder 	string	coords_${trajnumberstart}-${lasttrajnumb}_TPS
+variable		inputfiles_folder	string	inputfiles_${trajnumberstart}-${lasttrajnumb}_TPS
+variable		logfiles_folder		string	logfiles_${trajnumberstart}-${lasttrajnumb}_TPS
+shell			mkdir ${coords_folder} ${inputfiles_folder} ${logfiles_folder}
+	
+
+######################################################
+##### INITIALIZATION BEFORE RUNNING TRAJECTORIES #####
+######################################################
+
+
+
+# read in the initial shooting configuration from the dump file 
+units			real
+dimension		3
+boundary		p p p
+newton			on
+atom_style		full
+bond_style		harmonic
+angle_style		harmonic
+improper_style	none
+dihedral_style	none
+pair_style		lj/cut/coul/long 10.0
+
+#read_data		${default_input_data}
+
+region 			1 block ${xlow} ${xhigh} ${ylow} ${yhigh} ${zlow} ${zhigh} units box 
+create_box 		${n_atom_types} 1 bond/types 1 angle/types 1 
+read_dump		${trajname}_0_shoot_forw.xyz 0 x y z box no add yes format xyz 
+
+# initialize all the groups 
+group			water 			type 	3 4					# need for fix shake 
+group			Na_crystal 		type 	1 
+group 			Cl_crystal 		type 	2 
+group 			Na_sol 			type 	5
+group 			Cl_sol 			type 	6
+group 			oxy 			type 	3
+group 			hyd 			type 	4 
+
+# set charges for crystal ions since they never change
+set				group Na_crystal charge +1.0
+set				group Cl_crystal charge -1.0
+
+# initialize masses
+mass			1  22.99
+mass			2  35.453
+mass			3  15.9994
+mass			4  1.008
+mass			5  22.99
+mass			6  35.453
+
+
+
+timestep		${tstep}
+thermo			${delta_tm_steps}
+thermo_style 	custom ${thermo_output_lmp}
+
+
+
+
+################################
+##### RUN THE TRAJECTORIES #####
+################################
+
+variable		seed_for_lang 				equal 	44927
+variable		shoot_new_old				equal	floor(random(0,1.9999999,327845))											# 0 - old ;; 1 - new shooting point
+variable		forw_result_old		equal	0
+variable		back_result_old		equal	0
+variable		forw_steps_old		equal	0
+variable		back_steps_old		equal	0
+variable		shoot_new_old_old	equal	-1
+
+variable		trajnumber		loop 	${trajnumberstart} ${lasttrajnumb}					# counter for the trajectory number
+
+
+label			prep
+
+## initialize indicators for if done with forward and reverse directions
+variable		forw_done				equal		0
+variable		back_done				equal 		0
+
+variable		hAA						equal	0
+variable		hBB						equal	0
+variable		forw_result				equal	0
+variable		back_result				equal	0
+variable		forw_steps				equal	0
+variable 		back_steps				equal	0
+variable		forw_back_shoot			equal	floor(random(0,2.9999999,223589))
+if "${forw_back_shoot}==0" then &
+	"variable		file_for_shoot 		string	${trajname}_${prevacctrajnumb}_shoot_forw.xyz" &
+	"variable		shoot_direction		string	forward" &
+	"variable		shoot_new_old		equal	0" &
+elif "${forw_back_shoot}==1" then &
+	"variable		file_for_shoot 		string	${trajname}_${prevacctrajnumb}_shoot_forw.xyz" &
+	"variable		shoot_direction		string	forward" &
+	"variable		shoot_new_old		equal	${delta_t_from_shoot_n}" &
+else &
+	"variable		file_for_shoot 		string	${trajname}_${prevacctrajnumb}_shoot_back.xyz" &
+	"variable		shoot_direction		string  backward" &
+	"variable		shoot_new_old		equal	${delta_t_from_shoot_n}" 
+
+variable		file_milestones			equal 	1												## as written, this does not include "initial" config
+variable		seed_for_lang			equal	ceil(random(1,999999,36322))
+
+## call on python to set velocities and make data files with them for lammps to read
+shell			python set_velocity.py ${file_for_shoot} ${shoot_new_old} ${D} ${temp} ${xbox} ${ybox} ${zbox} ${halfxbox} ${halfybox} ${halfzbox} ${file_milestones} ${trajname} ${delta_t_from_shoot_n} ${trajnumber}
+jump			main.txt forward_traj
+
+	
+
+	
+label			forward_traj
+variable		input_file			string 		input_data_forw_${trajnumber}.dat						# input data file name
+variable		forw_back			string		forw									# string indicating forward or backward traj
+variable		outxyz				string		${trajname}_${trajnumber}_${forw_back}.xyz
+variable		forw_done			equal		1										# indicate forward is done
+variable		log_filename		string		log_${trajnumber}_${forw_back}.txt		# log filename from which to get energetic data from
+jump			${traj_script} begin
+
+
+label			backward_traj
+variable		input_file			string 		input_data_back_${trajnumber}.dat						# input data file name
+variable		forw_back			string		back									# string indicating forward or backward traj
+variable		outxyz				string		${trajname}_${trajnumber}_${forw_back}.xyz
+variable		back_done			equal		1										# indicate forward is done
+variable		log_filename		string		log_${trajnumber}_${forw_back}.txt		# log filename from which to get energetic data from
+jump			${traj_script} begin
+
+
+label			traj_done
+if "(${forw_done}==1) && (${back_done}==1)" then &
+	"jump		main.txt data_analysis" &
+else &
+	"jump		main.txt backward_traj" 
+
+
+label			data_analysis
+## zip everything first
+shell			gzip ${trajname}_${trajnumber}_forw.xyz ${trajname}_${trajnumber}_back.xyz input_data_forw_${trajnumber}.dat input_data_back_${trajnumber}.dat log_${trajnumber}_forw.txt log_${trajnumber}_back.txt
+shell			mv ${trajname}_${trajnumber}_forw.xyz.gz ${coords_folder}/${trajname}_${trajnumber}_forw.xyz.gz
+shell			mv ${trajname}_${trajnumber}_back.xyz.gz ${coords_folder}/${trajname}_${trajnumber}_back.xyz.gz
+shell			mv input_data_forw_${trajnumber}.dat.gz ${inputfiles_folder}/input_data_forw_${trajnumber}.dat.gz
+shell			mv input_data_back_${trajnumber}.dat.gz ${inputfiles_folder}/input_data_back_${trajnumber}.dat.gz
+shell			mv log_${trajnumber}_forw.txt.gz ${logfiles_folder}/log_${trajnumber}_forw.txt.gz
+shell			mv log_${trajnumber}_back.txt.gz ${logfiles_folder}/log_${trajnumber}_back.txt.gz
+
+#write out the data
+shell		echo ${trajnumber} ${prevacctrajnumb} ${shoot_direction} ${shoot_new_old}     ${forw_result}     ${back_result}     ${forw_steps}     ${back_steps} >> ${output_file}
+
+## move accepted shooting config if necessary
+if "${prevacctrajnumb}>0 && (${hAA}==1) && (${hBB}==1)" then &
+	"shell			gzip ${trajname}_${prevacctrajnumb}_shoot_forw.xyz ${trajname}_${prevacctrajnumb}_shoot_back.xyz" &
+	"shell			mv ${trajname}_${prevacctrajnumb}_shoot_forw.xyz.gz ${coords_folder}/${trajname}_${prevacctrajnumb}_shoot_forw.xyz.gz" &
+	"shell			mv ${trajname}_${prevacctrajnumb}_shoot_back.xyz.gz ${coords_folder}/${trajname}_${prevacctrajnumb}_shoot_back.xyz.gz" &
+	"variable	prevacctrajnumb		equal	${trajnumber}" &
+	"variable	accept				equal	1" &
+elif "${prevacctrajnumb}==0 && (${hAA}==1) && (${hBB}==1)" &
+	"variable	accept		equal	1" &
+	"variable	prevacctrajnumb		equal	${trajnumber}" &
+else &
+	"variable	accept		equal	0" &
+	"shell		gzip ${trajname}_${trajnumber}_shoot_forw.xyz ${trajname}_${trajnumber}_shoot_back.xyz" &
+	"shell		mv ${trajname}_${trajnumber}_shoot_forw.xyz.gz ${coords_folder}/${trajname}_${trajnumber}_shoot_forw.xyz.gz" &
+	"shell		mv ${trajname}_${trajnumber}_shoot_back.xyz.gz ${coords_folder}/${trajname}_${trajnumber}_shoot_back.xyz.gz"
+
+if "${trajnumber}>${lasttrajnumb}" then &
+	"jump		main.txt clean_up" &
+else &
+	"next		trajnumber" &
+	"jump		main.txt prep"
+
+
+
+	
+	
+label			clean_up
+if "${prevacctrajnumb}>0" then &
+	"shell			gzip ${trajname}_${prevacctrajnumb}_shoot_forw.xyz ${trajname}_${prevacctrajnumb}_shoot_back.xyz" &
+	"shell			mv ${trajname}_${prevacctrajnumb}_shoot_forw.xyz.gz ${coords_folder}/${trajname}_${prevacctrajnumb}_shoot_forw.xyz.gz" &
+	"shell			mv ${trajname}_${prevacctrajnumb}_shoot_back.xyz.gz ${coords_folder}/${trajname}_${prevacctrajnumb}_shoot_back.xyz.gz"
+	
+shell			tar cf ${coords_folder}.tar ${coords_folder}
+shell			tar cf ${inputfiles_folder}.tar ${inputfiles_folder}
+shell			tar cf ${logfiles_folder}.tar ${logfiles_folder}
+
+shell			python rm_dir.py ${coords_folder} ${inputfiles_folder} ${logfiles_folder}
+
+quit
+
+	
+
+
+
+
+
